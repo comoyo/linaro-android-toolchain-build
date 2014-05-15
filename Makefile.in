@@ -320,7 +320,7 @@ config-target-binutils: stmp-config-target-binutils
 # We do not want to enable shared libraries in binutils
 BINUTILS_CONFIG_ARGS=--prefix=$(prefix) \
 	--host=${cur_host} --build=${cur_build} \
-	$(baseargs) --disable-shared --disable-werror
+	$(baseargs) --disable-shared --disable-werror --disable-ppl-version-check
 ifeq ($(BINUTILS_VERSION),binutils-2.20.1)
 BINUTILS_CONFIG_ARGS+= --enable-gold=both/gold
 else
@@ -437,8 +437,6 @@ stmp-build-host-libbfd: stmp-config-host-libbfd
 	$(STAMP) $@
 # Also include libintl.a.  We have to do this manully since the
 # source of libintl in binutils is modified to not install the library.
-# We build with  always.  To avoid installing libiberty.a into /lib32,
-# we need to manually install the archive.  This will need to be cleaned up.
 install-host-libbfd: stmp-build-host-libbfd install-target-binutils
 	$(MAKE) -C libbfd-${BINUTILS_VERSION}/bfd install \
 		bfdlibdir=$(libdir) bfdincludedir=$(includedir) && \
@@ -488,7 +486,8 @@ ifeq ($(BUILD_ANDROID_GCC),yes)
 GCC_CONFIG_ARGS += $(GCC_CONFIG_LIBSTDCXX_V3) --disable-libssp \
 	--disable-nls --disable-libmudflap \
 	--disable-shared --disable-sjlj-exceptions \
-	--disable-libquadmath --disable-libitm --disable-libatomic
+	--disable-libquadmath --disable-libitm --disable-libatomic \
+	--disable-libsanitizer
 CFLAGS_FOR_TARGET += -DTARGET_POSIX_IO -fno-short-enums
 # We need to find pthread.h to build libgcc with threading support.
 # -include .../sys/limits.h is a workaround for Bionic's ptherad.h requiring
@@ -536,9 +535,9 @@ endif
 	# Building elfutils is necessary for ICS Bionic, but no longer for JellyBean
 	# Uncomment the line below if you're trying to build against a pre-JB Android tree.
 	#ONE_SHOT_MAKEFILE=external/elfutils/Android.mk make -C $(abs_srcdir)/../android all_modules TARGET_TOOLS_PREFIX=$(prefix)/bin/${cur_target}- TARGET_PRODUCT=pandaboard
-	ONE_SHOT_MAKEFILE=build/libs/host/Android.mk make -C $(abs_srcdir)/../android all_modules TARGET_TOOLS_PREFIX=$(prefix)/bin/${cur_target}- TARGET_PRODUCT=pandaboard
-	ONE_SHOT_MAKEFILE=build/tools/acp/Android.mk make -C $(abs_srcdir)/../android all_modules TARGET_TOOLS_PREFIX=$(prefix)/bin/${cur_target}- TARGET_PRODUCT=pandaboard
-	ONE_SHOT_MAKEFILE=bionic/Android.mk make -C $(abs_srcdir)/../android all_modules out/target/product/pandaboard/obj/lib/crtbegin_dynamic.o TARGET_TOOLS_PREFIX=$(prefix)/bin/${cur_target}- TARGET_PRODUCT=pandaboard
+	ONE_SHOT_MAKEFILE=build/libs/host/Android.mk make -C $(abs_srcdir)/../android all_modules TARGET_TOOLS_PREFIX=$(prefix)/bin/${cur_target}- TARGET_PRODUCT=pandaboard WITHOUT_LIBCOMPILER_RT=1
+	ONE_SHOT_MAKEFILE=build/tools/acp/Android.mk make -C $(abs_srcdir)/../android all_modules TARGET_TOOLS_PREFIX=$(prefix)/bin/${cur_target}- TARGET_PRODUCT=pandaboard WITHOUT_LIBCOMPILER_RT=1
+	ONE_SHOT_MAKEFILE=bionic/Android.mk make -C $(abs_srcdir)/../android all_modules out/target/product/pandaboard/obj/lib/crtbegin_dynamic.o TARGET_TOOLS_PREFIX=$(prefix)/bin/${cur_target}- TARGET_PRODUCT=pandaboard WITHOUT_LIBCOMPILER_RT=1 BUILD_TINY_ANDROID=true
 	cp $(abs_srcdir)/../android/out/target/product/pandaboard/obj/lib/* $(prefix)/$(target_no_unknown)/lib/
 	touch dummy.c
 	$(prefix)/bin/${cur_target}-gcc -o dummy.o -c dummy.c
@@ -574,8 +573,8 @@ define config-gcc =
 	 export CFLAGS_FOR_TARGET="$(CFLAGS_FOR_TARGET)" ; \
 	 export CXXFLAGS_FOR_TARGET="$(CXXFLAGS_FOR_TARGET)" ; \
 	 export LDFLAGS_FOR_TARGET="$(LDFLAGS_FOR_TARGET)" ; \
-	 export CFLAGS="-O2 " ; \
-	 export CXXFLAGS="-O2 " ; \
+	 export CFLAGS="-O2" ; \
+	 export CXXFLAGS="-O2" ; \
 	 $(call find-package-srcdir, $(GCC_VERSION))/configure \
 	  $(GCC_CONFIG_ARGS) --target=$$TARGET --enable-threads --enable-tls $(2)) && \
 	$(STAMP) $@
@@ -628,10 +627,10 @@ stmp-config-bootstrap-gcc: config.status $(if $(ENABLE_GRAPHITE),stmp-install-ho
 	 export CFLAGS_FOR_TARGET="$(CFLAGS_FOR_TARGET)" ; \
 	 export CXXFLAGS_FOR_TARGET="$(CXXFLAGS_FOR_TARGET)" ; \
 	 export LDFLAGS_FOR_TARGET="$(LDFLAGS_FOR_TARGET)" ; \
-	 export CFLAGS="-O2 " ; \
-	 export CXXFLAGS="-O2 " ; \
+	 export CFLAGS="-O2" ; \
+	 export CXXFLAGS="-O2" ; \
 	 $(call find-package-srcdir, $(GCC_VERSION))/configure \
-	  $(GCC_CONFIG_ARGS) --target=$$TARGET --enable-threads --enable-tls --disable-libgomp --disable-libstdc__-v3 --disable-libitm --disable-libatomic) && \
+	  $(GCC_CONFIG_ARGS) --target=$$TARGET --enable-threads --enable-tls --disable-libgomp --disable-libstdc__-v3 --disable-libitm --disable-libsanitizer --disable-libatomic) && \
 	$(STAMP) $@
 build-bootstrap-gcc: stmp-build-bootstrap-gcc
 stmp-build-bootstrap-gcc: stmp-config-bootstrap-gcc
@@ -677,10 +676,10 @@ stmp-config-target-gcc: config.status $(if $(ENABLE_GRAPHITE),stmp-install-host-
 	 export CFLAGS_FOR_TARGET="$(CFLAGS_FOR_TARGET) -fexceptions" ; \
 	 export CXXFLAGS_FOR_TARGET="$(CXXFLAGS_FOR_TARGET) -frtti" ; \
 	 export LDFLAGS_FOR_TARGET="$(LDFLAGS_FOR_TARGET)" ; \
-	 export CFLAGS="-O2 " ; \
-	 export CXXFLAGS="-O2 " ; \
+	 export CFLAGS="-O2" ; \
+	 export CXXFLAGS="-O2" ; \
 	 $(call find-package-srcdir, $(GCC_VERSION))/configure \
-	  $(GCC_CONFIG_ARGS) --target=$$TARGET --enable-threads --enable-tls --enable-libgomp --disable-libitm --disable-libatomic --disable-libstdc__-v3) && \
+	  $(GCC_CONFIG_ARGS) --target=$$TARGET --enable-threads --enable-tls --enable-libgomp --disable-libitm --disable-libsanitizer --disable-libatomic --disable-libstdc__-v3) && \
 	$(STAMP) $@
 build-target-gcc: stmp-build-target-gcc
 stmp-build-target-gcc: stmp-config-target-gcc
@@ -733,10 +732,10 @@ stmp-config-generic-target-gcc: config.status $(if $(ENABLE_GRAPHITE),stmp-insta
 	 export CFLAGS_FOR_TARGET="$(CFLAGS_FOR_TARGET)" ; \
 	 export CXXFLAGS_FOR_TARGET="$(CXXFLAGS_FOR_TARGET)" ; \
 	 export LDFLAGS_FOR_TARGET="$(LDFLAGS_FOR_TARGET)" ; \
-	 export CFLAGS="-O2 " ; \
-	 export CXXFLAGS="-O2 " ; \
+	 export CFLAGS="-O2" ; \
+	 export CXXFLAGS="-O2" ; \
 	 $(call find-package-srcdir, $(GCC_VERSION))/configure \
-	  $(GCC_CONFIG_ARGS) --target=$$TARGET --enable-threads --enable-tls --disable-libgomp --disable-libstdc__-v3 --disable-libitm --disable-libatomic) && \
+	  $(GCC_CONFIG_ARGS) --target=$$TARGET --enable-threads --enable-tls --disable-libgomp --disable-libstdc__-v3 --disable-libitm --disable-libsanitizer --disable-libatomic) && \
 	$(STAMP) $@
 build-generic-target-gcc: stmp-build-generic-target-gcc
 stmp-build-generic-target-gcc: stmp-config-generic-target-gcc
@@ -910,8 +909,8 @@ stmp-config-host-ppl: config.status stmp-install-host-gmp
 	 mkdir ${PPL_VERSION}) && \
 	($(canadian_env) \
 	 cd ${PPL_VERSION} ; \
-         export CFLAGS="${CFLAGS}  -I$(GMP_DIR)/include" ; \
-         export CXXFLAGS="${CFLAGS}  -I$(GMP_DIR)/include" ; \
+         export CFLAGS="${CFLAGS} -I$(GMP_DIR)/include" ; \
+         export CXXFLAGS="${CFLAGS} -I$(GMP_DIR)/include" ; \
 	$(call find-package-srcdir, ${PPL_VERSION})/configure \
 	 $(PPL_CONFIG_ARGS)) && \
 	$(STAMP) $@

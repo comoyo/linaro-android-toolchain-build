@@ -13,7 +13,6 @@
 # General Public License for more details.
 
 ARG_PREFIX_DIR=/tmp/android-toolchain-eabi
-ARG_TOOLCHAIN_SRC_DIR=${PWD%/build}
 
 ARG_LINARO_GCC_SRC_DIR=
 ARG_WGET_LINARO_GCC_SRC=
@@ -23,7 +22,7 @@ ARG_WITH_GCC=
 ARG_WITH_GDB=
 ARG_WITH_SYSROOT=
 
-ARG_APPLY_PATCH=no
+ARG_APPLY_PATCH=yes
 
 abort() {
   echo $@
@@ -54,10 +53,10 @@ usage() {
   echo "Valid options (defaults are in brackets)"
   echo "  --prefix=<path>             Specify installation path [/tmp/android-toolchain-eabi]"
   echo "  --toolchain-src=<path>      Toolchain source directory [`dirname $PWD`]"
-  echo "  --with-gcc=<path>           Specify GCC source (support: directory, bzr, url)"
-  echo "  --with-gdb=<path>           Specify gdb source (support: directory, bzr, url)"
+  echo "  --with-gcc=<path>           Specify GCC source (support: directory, bzr, git, url)"
+  echo "  --with-gdb=<path>           Specify gdb source (support: directory, bzr, git, url)"
   echo "  --with-sysroot=<path>       Specify SYSROOT directory"
-  echo "  --apply-gcc-patch=<yes|no>  Apply Linaro's extra gcc-patches [no]"
+  echo "  --apply-gcc-patch=<yes|no>  Apply Linaro's extra gcc-patches [yes]"
   echo "  --help                      Print this help message"
   echo
 }
@@ -85,6 +84,38 @@ downloadFromBZR() {
 }
 
 # $1 - package name (gcc, gdb, etc)
+# $2 - value of ARG_WITH_package (git://*)
+downloadFromGIT() {
+  local package=$1
+  local url=$2
+  local version=$3
+  local branch=master
+  if echo $url |grep -q '#'; then
+    branch=$(echo $url |cut -d# -f2)
+    url=$(echo $url |cut -d# -f1)
+  fi
+
+  local PACKAGE_NAME=`echo $package | tr "[:lower:]" "[:upper:]"`
+  eval "ARG_LINARO_${PACKAGE_NAME}_SRC_DIR=$package-$version"
+
+  dir=${ARG_TOOLCHAIN_SRC_DIR}/$package/$package-$version
+  if [ ! -d "$dir" ]; then
+    info "Use git to clone ${url}"
+    echo git clone ${url} $dir
+    git clone ${url} $dir
+    [ $? -ne 0 ] && error "git ${url} fails."
+    if [ $branch != master ]; then
+      cd $dir
+      git checkout -b $branch origin/$branch
+      cd ..
+    fi
+  else
+    info "$dir already exists, doing git pull"
+    (cd $dir; git pull)
+  fi
+}
+
+# $1 - package name (gcc, gdb, etc)
 # $2 - arg (lp:*, http://*)
 downloadFromHTTP() {
   local package=$1
@@ -99,12 +130,13 @@ downloadFromHTTP() {
     info "${file} is already exist, skip download"
   else
     wget -c "$url" || error "wget $1 error"
-    mv "$file" "${ARG_TOOLCHAIN_SRC_DIR}/$package/" || error "fail to move $file"
+    # Unpack it so we can apply patches if necessary
     #TODO: Add md5 check
+    tar -C "${ARG_TOOLCHAIN_SRC_DIR}/$package/" -xf "$file" || error "failed to untar $file"
   fi
 
   local src_dir=$(basename $file)
-  src_dir=$(echo $src_dir | sed "s/\(\.tar\.bz2\|\.tar\.gz\|\.tgz\|\.tbz\)//")
+  src_dir=$(echo $src_dir | sed "s/\(\.tar\.xz\|\.tar\.bz2\|\.tar\.gz\||.txz\|\.tgz\|\.tbz\)//")
   eval "ARG_LINARO_${PACKAGE_NAME}_SRC_DIR=${src_dir}"
 }
 
@@ -121,10 +153,22 @@ getPackage() {
       package=${package%%-*}
       info "Detected package \"$package\" and version \"$version\" for $1 bzr repo"
       ;;
+    git:*|ssh://*|http://git.*|https://git.*)
+      package=$(basename $1)
+      if echo $package |grep -q '#'; then
+        version=$(echo $package |cut -d# -f2)
+	package=$(echo $package |cut -d# -f1)
+      else
+        # Let's take a good guess: This is gcc master branch, so it
+	# should be 4.9 for now...
+	version=4.9
+      fi
+      package=${package/.git/}
+      ;;
     *)
       package=$(basename $1)
       version=${package#*-}
-      version=$(echo $version | sed "s/\(\.tar\.bz2\|\.tar\.gz\|\.tgz\|\.tbz\)//")
+      version=$(echo $version | sed "s/\(\.tar\.xz\|\.tar\.bz2\|\.tar\.gz\|\.txz\|\.tgz\|\.tbz\)//")
       package=${package%%-*}
       ;;
   esac
@@ -137,7 +181,10 @@ getPackage() {
     lp:*) # bzr clone lp:gcc-linaro
       downloadFromBZR $package $1 $version
       ;;
-    http://*) # snapshot URL
+    git:*|ssh://*|http://git.*|https://git.*) # git URL
+      downloadFromGIT $package $1 $version
+      ;;
+    http://*|https://*) # snapshot URL
       # http://launchpad.net/gcc-linaro/4.5/4.5-2011.04-0/+download/gcc-linaro-4.5-2011.04-0.tar.bz2
       downloadFromHTTP $package $1
       ;;
@@ -226,13 +273,16 @@ done
 
 if [ "x${ARG_APPLY_PATCH}" = "xyes" ]; then
   sub_gcc_ver="`echo ${ARG_LINARO_GCC_VER} | grep -o '4\.\([5-9]\|[1-9][0-9]\)'`"
+  [ -e ${ARG_TOOLCHAIN_SRC_DIR}/gcc/${ARG_LINARO_GCC_SRC_DIR}/gcc/BASE-VER ] && sub_gcc_ver="`cat ${ARG_TOOLCHAIN_SRC_DIR}/gcc/${ARG_LINARO_GCC_SRC_DIR}/gcc/BASE-VER |cut -d. -f1-2`"
   note "Will apply patches in toolchain/gcc-patches/${sub_gcc_ver}"
   cd ${ARG_TOOLCHAIN_SRC_DIR}/gcc/${ARG_LINARO_GCC_SRC_DIR} &&
   for FILE in `ls ${ARG_TOOLCHAIN_SRC_DIR}/gcc-patches/${sub_gcc_ver} 2>/dev/null` ; do
     if [ ! -f ${FILE}-patch.log ]; then
       note "Apply patch: ${FILE}"
-      git apply ${ARG_TOOLCHAIN_SRC_DIR}/gcc-patches/${sub_gcc_ver}/${FILE} 2>&1 | \
-        tee "${FILE}-patch.log"
+      if ! git apply ${ARG_TOOLCHAIN_SRC_DIR}/gcc-patches/${sub_gcc_ver}/${FILE} 2>&1 >"${FILE}-patch.log"; then
+        cat "${FILE}-patch.log"
+        error "${FILE} failed to apply. Please fix."
+      fi
     fi
   done
   cd -
@@ -248,31 +298,31 @@ fi
 
 case "$BUILD_OS" in
     Linux)
-	case "$BUILD_ARCH" in
-	    *64*)
-		info "Use 64-bit Build environment"
-		BUILD_HOST=${BUILD_ARCH}-linux-gnu
-		;;
-	    *)
-		info "Use 32-bit Build environment"
-		BUILD_HOST=${BUILD_ARCH}-unknown-linux-gnu
-		;;
-	esac
-	;;
+  case "$BUILD_ARCH" in
+      *64*)
+    info "Use 64-bit Build environment"
+    BUILD_HOST=${BUILD_ARCH}-linux-gnu
+    ;;
+      *)
+    info "Use 32-bit Build environment"
+    BUILD_HOST=${BUILD_ARCH}-unknown-linux-gnu
+    ;;
+  esac
+  ;;
     Darwin)
-	case "$BUILD_ARCH" in
-	    *64*)
-		info "Use 64-bit Build environment"
-		;;
-	    *)
-		info "Use 32-bit Build environment"
-		;;
-	esac
-	BUILD_HOST=${BUILD_ARCH}-apple-darwin
-	;;
+  case "$BUILD_ARCH" in
+      *64*)
+    info "Use 64-bit Build environment"
+    ;;
+      *)
+    info "Use 32-bit Build environment"
+    ;;
+  esac
+  BUILD_HOST=${BUILD_ARCH}-apple-darwin
+  ;;
     *)
-	error "Unrecognized OS: $BUILD_OS"
-	;;
+  error "Unrecognized OS: $BUILD_OS"
+  ;;
 esac
 
 [ -z "$TARGET" ] && TARGET=arm-linux-androideabi
@@ -288,7 +338,7 @@ ${ARG_TOOLCHAIN_SRC_DIR}/build/configure \
   --with-binutils-version=${BINUTILS_VERSION-current} \
   \
   --with-gmp-version=${GMP_VERSION-current} \
-  --with-mpfr-version=${MPFR_VERSION-3.1.1} \
+  --with-mpfr-version=${MPFR_VERSION-current} \
   --with-mpc-version=${MPC_VERSION-current} \
   \
   ${LINARO_BUILD_EXTRA_CONFIGURE_FLAGS} || abort "configure: Error $?"
